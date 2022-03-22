@@ -1,0 +1,9 @@
+artifactoryIntegration: artifactory
+registry: dkelerplt.jfrog.io
+dstRepository: docker
+imageName: py-web-conf-app
+
+myRepo:
+  gitProvider: gitRepo
+  path: dkeler/python-web-conference2022
+  mainBranch: main

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-app
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Release.Name }}-app
+    env: {{ .Values.env }}
+spec:
+  replicas: {{ .Values.deployment.app.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-app
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-app
+        env: {{ .Values.env }}
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - image: {{ .Values.deployment.app.image.name }}:{{ .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.deployment.app.image.imagePullPolicy }}
+          name: {{ .Release.Name }}-app
+          env:
+            - name: DEPLOY_VERSION
+              value: "{{ .Chart.AppVersion }}"
+            - name: REDIS_HOST
+              value: "{{ .Release.Name }}-redis"
+            - name: REDIS_PORT
+              value: "{{ .Values.deployment.redis.image.containerPort }}"
+            - name: USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Release.Name }}-secret"
+                  key: "{{ .Values.secrets.username.key }}"
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Release.Name }}-secret"
+                  key: "{{ .Values.secrets.password.key }}"
+            - name: THEBIGSECRET
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Release.Name }}-secret"
+                  key: "{{ .Values.secrets.thebigsecret.key }}"
+          ports:
+            - containerPort: {{ .Values.deployment.app.image.containerPort }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi

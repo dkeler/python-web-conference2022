@@ -1,0 +1,47 @@
+env: production
+
+namespace: py-web-conf
+
+deployment:
+  redis:
+    replicaCount: 1
+    image:
+      name: redis:alpine
+      imagePullPolicy: IfNotPresent
+      containerPort: 6379
+  app:
+    replicaCount: 1
+    image:
+      name: dkelerplt.jfrog.io/docker/py-web-conf-app
+      imagePullPolicy: IfNotPresent
+      containerPort: 3000
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: { }
+  hosts:
+    - host: py-web-conf.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+
+secrets:
+  username:
+    key: USERNAME
+  password:
+    key: PASSWORD
+  thebigsecret:
+    key: THEBIGSECRET
+
+serviceAccount:
+  create: true
+  annotations: { }
+  name: ""
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80

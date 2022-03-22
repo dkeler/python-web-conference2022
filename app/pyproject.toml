@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "app"
+version = "0.0.0"
+description = ""
+authors = ["Daniel Keler <dkeler@redhat.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+redis = "4.1.4"
+fastapi = "^0.75.0"
+uvicorn = "^0.17.6"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.1.0"
+
+[[tool.poetry.source]]
+name = "artifactory"
+url = "https://dkelerplt.jfrog.io/artifactory/api/pypi/python/simple/"
+default = true
+
+[tool.pytest.ini_options]
+markers = ["test1", "test2", "test3"]

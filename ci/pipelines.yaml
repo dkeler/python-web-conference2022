@@ -1,0 +1,342 @@
+template: true
+valuesFilePath: ./values.yaml
+
+resources:
+  - name: PWCRepo
+    type: GitRepo
+    configuration:
+      gitProvider: {{ .Values.myRepo.gitProvider }}
+      path: {{ .Values.myRepo.path }}
+      branches:
+        include: {{ .Values.myRepo.mainBranch }}
+
+  - name: PWCAppPropertyBag
+    type: PropertyBag
+    configuration:
+      appVersion: 0
+      appRevision: 0
+
+  - name: PWCAppDeployPropertyBag
+    type: PropertyBag
+    configuration:
+      testsPassed: "false"
+
+  - name: PWCPkgInfo
+    type: BuildInfo
+    configuration:
+      sourceArtifactory: {{ .Values.artifactoryIntegration }}
+      buildName: pyWebConfAppPkg
+      buildNumber: ${run_number}
+
+  - name: PWCImgInfo
+    type: BuildInfo
+    configuration:
+      sourceArtifactory: {{ .Values.artifactoryIntegration }}
+      buildName: pyWebConfAppImg
+      buildNumber: ${run_number}
+
+  - name: PWCAppImage
+    type: Image
+    configuration:
+      registry: {{ .Values.artifactoryIntegration }}
+      sourceRepository: docker
+      imageName: {{ .Values.registry }}/{{ .Values.dstRepository }}/{{ .Values.imageName }}
+      imageTag: ""
+
+  - name: PWCHelmChart
+    type: HelmChart
+    configuration:
+      sourceArtifactory: {{ .Values.artifactoryIntegration }}
+      repository: pywebconf-helm
+      chart: py-web-conf
+      version: ""
+
+pipelines:
+  - name: PWC_APP_PKG
+    configuration:
+      retentionPolicy:
+        maxAgeDays: 90
+        minRuns: 10
+      runtime:
+        type: image
+        image:
+          custom:
+            name: "dkelerplt.jfrog.io/docker/poetry"
+            tag: "1.1.13"
+            autoPull: true
+            registry: "artifactory"
+            sourceRepository: "docker"
+
+    steps:
+      - name: PWCApp
+        type: Bash
+        configuration:
+          environmentVariables:
+            release_type:
+              default: patch
+              description: Version to be release
+              values:
+                - patch
+                - minor
+                - major
+              allowCustom: true
+          affinityGroup: pwcBuild
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputResources:
+            - name: PWCRepo
+          outputResources:
+            - name: PWCAppPropertyBag
+            - name: PWCAppImage
+        execution:
+          onExecute:
+            - cp -R ${res_PWCRepo_resourcePath} ${shared_workspace}/src
+            - pushd ${shared_workspace}/src/app
+            - poetry version ${release_type}
+            - app_version=$(poetry version -s)
+            - write_output PWCAppPropertyBag appVersion=${app_version} appRevision="${res_PWCRepo_commitSha}"
+            - write_output PWCAppImage imageTag=${app_version}-${res_PWCRepo_commitSha}
+            - popd
+            - pushd ${shared_workspace}/src
+            - make build-app
+            - popd
+
+      - name: testPWCApp1
+        type: Bash
+        configuration:
+          affinityGroup: pwcBuild
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputSteps:
+            - name: PWCApp
+        execution:
+          onExecute:
+            - mkdir -p ${shared_workspace}/src/tests1
+            - pushd ${shared_workspace}/src
+            - make test-app1
+            - popd
+          onComplete:
+            - save_tests ${shared_workspace}/src/app/tests1/tests_report.xml
+
+      - name: testPWCApp2
+        type: Bash
+        configuration:
+          affinityGroup: pwcBuild
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputSteps:
+            - name: PWCApp
+        execution:
+          onExecute:
+            - mkdir -p ${shared_workspace}/src/tests2
+            - pushd ${shared_workspace}/src
+            - make test-app2
+            - popd
+          onComplete:
+            - save_tests ${shared_workspace}/src/app/tests2/tests_report.xml
+
+      - name: testPWCApp3
+        type: Bash
+        configuration:
+          affinityGroup: pwcBuild
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputSteps:
+            - name: PWCApp
+        execution:
+          onExecute:
+            - mkdir -p ${shared_workspace}/src/tests3
+            - pushd ${shared_workspace}/src
+            - make test-app3
+            - popd
+          onComplete:
+            - save_tests ${shared_workspace}/src/app/tests3/tests_report.xml
+
+      - name: publishPWCApp
+        type: UploadArtifact
+        configuration:
+          affinityGroup: pwcBuild
+          sourcePath: ${shared_workspace}/src/app/dist/*
+          targetPath: python/app/${res_PWCAppPropertyBag_appVersion}/
+          autoPublishBuildInfo: true
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputSteps:
+            - name: testPWCApp1
+            - name: testPWCApp2
+            - name: testPWCApp3
+          inputResources:
+            - name: PWCAppPropertyBag
+          outputResources:
+            - name: PWCPkgInfo
+        execution:
+          onStart:
+            - pushd ${shared_workspace}/src
+            - make publish-app
+            - popd
+
+  - name: PWC_APP_IMG
+    configuration:
+      retentionPolicy:
+        maxAgeDays: 90
+        minRuns: 10
+
+    steps:
+      - name: PWCAppImage
+        type: DockerBuild
+        configuration:
+          affinityGroup: pwcImage
+          dockerFileLocation: app
+          dockerFileName: Dockerfile
+          dockerImageName: {{ .Values.registry }}/{{ .Values.dstRepository }}/{{ .Values.imageName }}
+          dockerImageTag: ${res_PWCAppPropertyBag_appVersion}-${res_PWCRepo_commitSha}
+          dockerOptions: --build-arg app_version=${res_PWCAppPropertyBag_appVersion} --build-arg app_revision=${res_PWCAppPropertyBag_appRevision} --build-arg int_artifactory_url=${int_artifactory_url} --build-arg int_artifactory_user=${int_artifactory_user} --build-arg int_artifactory_apikey=${int_artifactory_apikey} --build-arg release_type=${release_type}
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputResources:
+            - name: PWCAppPropertyBag
+            - name: PWCRepo
+              trigger: false
+        execution:
+          onSuccess:
+            - cp -R ${res_PWCRepo_resourcePath}/chart ${shared_workspace}/chart
+
+      - name: pushPWCAppImage
+        type: DockerPush
+        configuration:
+          affinityGroup: pwcImage
+          targetRepository: docker
+          autoPublishBuildInfo: true
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputSteps:
+            - name: PWCAppImage
+          outputResources:
+            - name: PWCAppImage
+            - name: PWCImgInfo
+
+      - name: securityComplianceScan
+        type: XrayScan
+        configuration:
+          failOnScan: false
+          inputResources:
+            - name: PWCImgInfo
+            - name: PWCAppImage
+              trigger: false
+
+      - name: validatePWCHelmChart
+        type: Bash
+        configuration:
+          runtime:
+            type: image
+            image:
+              custom:
+                name: "dkelerplt.jfrog.io/docker/helm-datree"
+                tag: "latest"
+                autoPull: true
+                registry: "artifactory"
+                sourceRepository: "docker"
+          affinityGroup: pwcImage
+          integrations:
+            - name: {{ .Values.artifactoryIntegration }}
+          inputSteps:
+            - name: PWCAppImage
+        execution:
+          onExecute:
+            - pushd ${shared_workspace}
+            - helm datree test ./chart || exit 0
+            - popd
+
+      - name: publishPWCHelmChart
+        type: HelmPublish
+        configuration:
+          helmVersion: 3
+          chartPath: "./chart"
+          lint: true
+          autoPublishBuildInfo: false
+          inputSteps:
+            - name: validatePWCHelmChart
+          inputResources:
+            - name: PWCAppPropertyBag
+            - name: PWCRepo
+              trigger: false
+          outputResources:
+            - name: PWCHelmChart
+        execution:
+          onStart:
+            - CHART_VERSION=${res_PWCAppPropertyBag_appVersion}-${res_PWCAppPropertyBag_appRevision}
+            - pushd ${res_PWCRepo_resourcePath}/chart
+            - "sed -ie \"s/^version: .*$/version: $CHART_VERSION/\" Chart.yaml"
+            - "sed -ie \"s/^appVersion: .*$/appVersion: $CHART_VERSION/\" Chart.yaml"
+            - popd
+          onSuccess:
+            - write_output PWCHelmChart version=${res_PWCAppPropertyBag_appVersion}-${res_PWCAppPropertyBag_appRevision}
+
+  - name: PWC_APP_DPL
+    configuration:
+      retentionPolicy:
+        maxAgeDays: 90
+        minRuns: 10
+
+    steps:
+      - name: PWCHelmSTGDeploy
+        type: HelmDeploy
+        configuration:
+          helmVersion: 3
+          releaseName: py-web-conf
+          flags: "--set env='staging' -f values.yaml"
+          integrations:
+            - name: k8s
+          inputResources:
+            - name: PWCHelmChart
+
+      - name: testIntegrationPWCApp
+        type: Bash
+        configuration:
+          affinityGroup: pwcDeploy
+          inputSteps:
+            - name: PWCHelmSTGDeploy
+          outputResources:
+            - name: PWCAppDeployPropertyBag
+        execution:
+          onExecute:
+            - echo "Catch all nasty bugs"
+            - write_output PWCAppDeployPropertyBag testsPassed="true"
+
+      - name: testBenchmarkPWCApp
+        type: Bash
+        configuration:
+          affinityGroup: pwcDeploy
+          inputSteps:
+            - name: PWCHelmSTGDeploy
+          outputResources:
+            - name: PWCAppDeployPropertyBag
+        execution:
+          onExecute:
+            - echo "Catch all nasty bottlenecks"
+            - write_output PWCAppDeployPropertyBag testsPassed="true"
+
+      - name: testImportantPWCApp
+        type: Bash
+        configuration:
+          affinityGroup: pwcDeploy
+          inputSteps:
+            - name: PWCHelmSTGDeploy
+          outputResources:
+            - name: PWCAppDeployPropertyBag
+        execution:
+          onExecute:
+            - echo "Catch any other important test before going to Production"
+            - write_output PWCAppDeployPropertyBag testsPassed="true"
+
+      - name: PWCHelmPRODDeploy
+        type: HelmDeploy
+        configuration:
+          helmVersion: 3
+          releaseName: py-web-conf
+          integrations:
+            - name: openshift
+          inputResources:
+            - name: PWCAppDeployPropertyBag
+            - name: PWCHelmChart
+              trigger: false
